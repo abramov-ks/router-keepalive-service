@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MikroTik Keepalive</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <h1>MikroTik Keepalive</h1>
+  <div class="controls">
+    <label for="router-select">Router</label>
+    <select id="router-select"></select>
+
+    <label for="date-input">Date</label>
+    <input type="date" id="date-input">
+
+    <div class="toggle-group">
+      <button id="btn-day" class="active" onclick="switchView('day')">Day</button>
+      <button id="btn-week" onclick="switchView('week')">Week</button>
+    </div>
+  </div>
+  <div class="last-ping" id="last-ping"></div>
+</header>
+
+<main>
+  <div class="card">
+    <div id="empty-state" class="empty-state" style="display:none">
+      <strong>No data available</strong>
+      <p id="empty-msg">No routers have pinged yet.</p>
+    </div>
+    <div id="chart-area">
+      <div class="chart-container">
+        <canvas id="daily-chart"></canvas>
+      </div>
+      <div class="chart-container" style="display:none">
+        <canvas id="weekly-chart"></canvas>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="/static/chart.umd.min.js"></script>
+<script>
+(function () {
+  // ── State ──────────────────────────────────────────────────────────────────
+  let currentRouter = '{{.Router}}';
+  let currentDate   = '{{.Date}}';
+  let currentView   = '{{.View}}' || 'day';
+  let dailyChart    = null;
+  let weeklyChart   = null;
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  function todayStr() {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  function updateURL() {
+    const params = new URLSearchParams({ router: currentRouter, date: currentDate, view: currentView });
+    history.replaceState(null, '', '?' + params.toString());
+  }
+
+  function showEmpty(msg) {
+    document.getElementById('empty-state').style.display = 'flex';
+    document.getElementById('chart-area').style.display = 'none';
+    document.getElementById('empty-msg').textContent = msg || 'No data for this selection.';
+  }
+
+  function showCharts() {
+    document.getElementById('empty-state').style.display = 'none';
+    document.getElementById('chart-area').style.display = 'block';
+  }
+
+  // ── Router selector ────────────────────────────────────────────────────────
+  async function loadRouters() {
+    const res = await fetch('/api/routers');
+    const routers = await res.json();
+    const sel = document.getElementById('router-select');
+    sel.innerHTML = '';
+
+    if (!routers || routers.length === 0) {
+      showEmpty('No routers have pinged yet. Configure your MikroTik router to send pings to this server.');
+      sel.disabled = true;
+      return;
+    }
+
+    routers.forEach(r => {
+      const opt = document.createElement('option');
+      opt.value = r.router_id;
+      opt.textContent = r.router_id;
+      sel.appendChild(opt);
+    });
+
+    if (!currentRouter || !routers.find(r => r.router_id === currentRouter)) {
+      currentRouter = routers[0].router_id;
+    }
+    sel.value = currentRouter;
+    sel.disabled = routers.length === 1;
+
+    updateLastPing(routers.find(r => r.router_id === currentRouter));
+    showCharts();
+    renderActive();
+  }
+
+  function updateLastPing(routerInfo) {
+    const el = document.getElementById('last-ping');
+    if (!routerInfo || !routerInfo.last_seen) { el.textContent = ''; return; }
+    const d = new Date(routerInfo.last_seen);
+    el.textContent = 'Last ping: ' + d.toLocaleString();
+  }
+
+  document.getElementById('router-select').addEventListener('change', async function () {
+    currentRouter = this.value;
+    updateURL();
+    const res = await fetch('/api/routers');
+    const routers = await res.json();
+    updateLastPing(routers.find(r => r.router_id === currentRouter));
+    renderActive();
+  });
+
+  // ── Date picker ────────────────────────────────────────────────────────────
+  function initDatePicker() {
+    const input = document.getElementById('date-input');
+    const today = todayStr();
+    const minDate = new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10);
+    input.max = today;
+    input.min = minDate;
+    if (!currentDate) currentDate = today;
+    input.value = currentDate;
+  }
+
+  document.getElementById('date-input').addEventListener('change', function () {
+    currentDate = this.value;
+    currentView = 'day';
+    switchView('day', false);
+    updateURL();
+    renderDaily();
+  });
+
+  // ── View toggle ────────────────────────────────────────────────────────────
+  function switchView(view, doRender) {
+    currentView = view;
+    const dailyCanvas   = document.getElementById('daily-chart');
+    const weeklyCanvas  = document.getElementById('weekly-chart');
+    const dateInput     = document.getElementById('date-input');
+
+    if (view === 'day') {
+      dailyCanvas.parentElement.style.display = 'block';
+      weeklyCanvas.parentElement.style.display = 'none';
+      dateInput.disabled = false;
+      document.getElementById('btn-day').classList.add('active');
+      document.getElementById('btn-week').classList.remove('active');
+      if (doRender !== false) renderDaily();
+    } else {
+      dailyCanvas.parentElement.style.display = 'none';
+      weeklyCanvas.parentElement.style.display = 'block';
+      dateInput.disabled = true;
+      document.getElementById('btn-day').classList.remove('active');
+      document.getElementById('btn-week').classList.add('active');
+      if (doRender !== false) renderWeekly();
+    }
+    updateURL();
+  }
+
+  function renderActive() {
+    if (currentView === 'week') renderWeekly(); else renderDaily();
+  }
+
+  // ── Daily chart ────────────────────────────────────────────────────────────
+  async function renderDaily() {
+    if (!currentRouter) return;
+    const url = '/api/stats/daily?router_id=' + encodeURIComponent(currentRouter) + '&date=' + currentDate;
+    const res  = await fetch(url);
+    if (res.status === 404) { showEmpty('No data for this router on ' + currentDate + '.'); return; }
+    showCharts();
+    const data = await res.json();
+
+    const labels = data.buckets.map(b => b.time.slice(11, 16)); // HH:MM
+    const values = data.buckets.map(b => b.count);
+    const colors = values.map(v => v > 0 ? '#4caf50' : '#e0e0e0');
+
+    const canvas = document.getElementById('daily-chart');
+    if (dailyChart) dailyChart.destroy();
+    dailyChart = new Chart(canvas, {
+      type: 'bar',
+      data: { labels, datasets: [{ data: values, backgroundColor: colors, borderWidth: 0, barPercentage: 1, categoryPercentage: 1 }] },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: {
+          callbacks: { title: items => items[0].label, label: item => item.raw > 0 ? item.raw + ' ping(s)' : 'No ping' }
+        }},
+        scales: {
+          x: { ticks: { maxTicksLimit: 24, maxRotation: 0 }, grid: { display: false } },
+          y: { display: false }
+        }
+      }
+    });
+  }
+
+  // ── Weekly chart ───────────────────────────────────────────────────────────
+  async function renderWeekly() {
+    if (!currentRouter) return;
+    const url  = '/api/stats/weekly?router_id=' + encodeURIComponent(currentRouter);
+    const res  = await fetch(url);
+    if (res.status === 404) { showEmpty('No weekly data for this router.'); return; }
+    showCharts();
+    const data = await res.json();
+
+    const labels = data.days.map(d => d.date);
+    const values = data.days.map(d => d.count);
+
+    const canvas = document.getElementById('weekly-chart');
+    if (weeklyChart) weeklyChart.destroy();
+    weeklyChart = new Chart(canvas, {
+      type: 'bar',
+      data: { labels, datasets: [{ data: values, backgroundColor: '#1976d2', borderWidth: 0 }] },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: {
+          callbacks: { label: item => item.raw + ' ping(s)' }
+        }},
+        scales: {
+          x: { grid: { display: false } },
+          y: { beginAtZero: true, ticks: { precision: 0 } }
+        },
+        onClick: (evt, elements) => {
+          if (!elements.length) return;
+          const idx = elements[0].index;
+          currentDate = data.days[idx].date;
+          document.getElementById('date-input').value = currentDate;
+          switchView('day');
+        }
+      }
+    });
+  }
+
+  // ── Init ───────────────────────────────────────────────────────────────────
+  window.switchView = switchView; // expose for onclick attributes
+  initDatePicker();
+  loadRouters();
+})();
+</script>
+</body>
+</html>
