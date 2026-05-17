@@ -1,0 +1,30 @@
+# Go binaries
+server
+*.exe
+*.test
+*.out
+
+# Go module cache / vendor
+vendor/
+
+# SQLite database files
+*.db
+*.db-wal
+*.db-shm
+
+# Environment
+.env
+.env.*
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+
+# Editor
+.vscode/
+.idea/
+
+# Build artifacts
+dist/

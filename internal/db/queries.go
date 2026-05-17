@@ -1,0 +1,140 @@
+package db
+
+import (
+	"database/sql"
+	"fmt"
+	"time"
+
+	"github.com/cyrill/mikrotik-keepalive-server/internal/model"
+)
+
+// StorePing persists one keepalive event. received_at is set by the server.
+func StorePing(database *sql.DB, routerID, sourceIP string) error {
+	_, err := database.Exec(
+		`INSERT INTO ping_events (router_id, source_ip) VALUES (?, ?)`,
+		routerID, sourceIP,
+	)
+	return err
+}
+
+// ListRouters returns all known routers ordered by first_seen ASC.
+func ListRouters(database *sql.DB) ([]model.RouterInfo, error) {
+	rows, err := database.Query(`
+		SELECT router_id,
+		       MAX(received_at) AS last_seen,
+		       MIN(received_at) AS first_seen,
+		       COUNT(*)         AS total_pings
+		FROM ping_events
+		GROUP BY router_id
+		ORDER BY first_seen ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []model.RouterInfo
+	for rows.Next() {
+		var r model.RouterInfo
+		var lastSeen, firstSeen string
+		if err := rows.Scan(&r.RouterID, &lastSeen, &firstSeen, &r.TotalPings); err != nil {
+			return nil, err
+		}
+		r.LastSeen, _ = time.Parse("2006-01-02 15:04:05", lastSeen)
+		r.FirstSeen, _ = time.Parse("2006-01-02 15:04:05", firstSeen)
+		result = append(result, r)
+	}
+	return result, rows.Err()
+}
+
+// DailyStats returns 1-minute bucket ping counts for a router on a given date (YYYY-MM-DD).
+// The returned slice always has exactly 1440 entries (one per minute of the day).
+func DailyStats(database *sql.DB, routerID, date string) ([]model.BucketPoint, error) {
+	rows, err := database.Query(`
+		SELECT strftime('%Y-%m-%dT%H:%M:00Z', received_at) AS bucket,
+		       COUNT(*) AS cnt
+		FROM ping_events
+		WHERE router_id = ? AND date(received_at) = ?
+		GROUP BY bucket
+		ORDER BY bucket
+	`, routerID, date)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	// Build a map of bucket → count from DB
+	counts := make(map[string]int, 1440)
+	for rows.Next() {
+		var bucket string
+		var cnt int
+		if err := rows.Scan(&bucket, &cnt); err != nil {
+			return nil, err
+		}
+		counts[bucket] = cnt
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Zero-fill all 1440 minutes
+	result := make([]model.BucketPoint, 1440)
+	base, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		return nil, fmt.Errorf("invalid date %q: %w", date, err)
+	}
+	for i := 0; i < 1440; i++ {
+		t := base.Add(time.Duration(i) * time.Minute)
+		key := t.UTC().Format("2006-01-02T15:04:05Z")
+		result[i] = model.BucketPoint{Time: key, Count: counts[key]}
+	}
+	return result, nil
+}
+
+// WeeklyStats returns per-day ping counts for the last 7 days for a router.
+// The returned slice always has exactly 7 entries (today−6 through today).
+func WeeklyStats(database *sql.DB, routerID string) ([]model.DayPoint, error) {
+	rows, err := database.Query(`
+		SELECT date(received_at) AS day, COUNT(*) AS cnt
+		FROM ping_events
+		WHERE router_id = ? AND received_at >= datetime('now', '-7 days')
+		GROUP BY day
+		ORDER BY day
+	`, routerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	counts := make(map[string]int, 7)
+	for rows.Next() {
+		var day string
+		var cnt int
+		if err := rows.Scan(&day, &cnt); err != nil {
+			return nil, err
+		}
+		counts[day] = cnt
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Zero-fill 7 days: today−6 through today
+	today := time.Now().In(time.Local).Format("2006-01-02")
+	base, _ := time.Parse("2006-01-02", today)
+	result := make([]model.DayPoint, 7)
+	for i := 0; i < 7; i++ {
+		d := base.AddDate(0, 0, i-6).Format("2006-01-02")
+		result[i] = model.DayPoint{Date: d, Count: counts[d]}
+	}
+	return result, nil
+}
+
+// RouterExists returns true when the given router ID has at least one ping stored.
+func RouterExists(database *sql.DB, routerID string) (bool, error) {
+	var count int
+	err := database.QueryRow(
+		`SELECT COUNT(*) FROM ping_events WHERE router_id = ? LIMIT 1`, routerID,
+	).Scan(&count)
+	return count > 0, err
+}

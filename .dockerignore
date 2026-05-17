@@ -1,0 +1,11 @@
+.git/
+*.db
+*.db-wal
+*.db-shm
+*.log
+.env
+.env.*
+specs/
+.specify/
+.claude/
+server
