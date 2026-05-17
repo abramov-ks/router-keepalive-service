@@ -6,12 +6,13 @@ import (
 	"net/http"
 	"regexp"
 
+	"github.com/cyrill/mikrotik-keepalive-server/internal/config"
 	"github.com/cyrill/mikrotik-keepalive-server/internal/db"
 )
 
 var routerIDRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 
-func PingHandler(database *sql.DB) http.HandlerFunc {
+func PingHandler(database *sql.DB, store *config.AllowlistStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		routerID := r.URL.Query().Get("id")
 		sourceIP := r.RemoteAddr
@@ -19,6 +20,12 @@ func PingHandler(database *sql.DB) http.HandlerFunc {
 		if !routerIDRegex.MatchString(routerID) {
 			slog.Warn("ping rejected: invalid router id", "id", routerID, "remote", sourceIP)
 			http.Error(w, "missing or invalid router id", http.StatusBadRequest)
+			return
+		}
+
+		if !store.IsAllowed(routerID) {
+			slog.Warn("ping rejected: router not in allowlist", "router_id", routerID, "remote", sourceIP)
+			http.Error(w, "router not allowed", http.StatusForbidden)
 			return
 		}
 
