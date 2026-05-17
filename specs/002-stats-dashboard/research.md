@@ -44,22 +44,22 @@ boilerplate with no downside.
 
 **Decision**: Chart.js v4 (bundled as a single UMD file via `//go:embed`)
 
-**Rationale**: Chart.js provides bar charts and timeline/scatter plots out of the
+**Rationale**: Chart.js provides line chart with cubic interpolation charts and timeline/scatter plots out of the
 box with a minimal, well-documented API. The UMD build is a single ~220KB file with
 no additional dependencies. It renders client-side via Canvas, which works in all
 modern browsers without a build step on the server.
 
-**Daily chart implementation**: A bar chart where the X-axis is time buckets
-(1-minute resolution) and each bar is present (green) or absent/zero (grey) based
+**Daily chart implementation**: A line chart with cubic interpolation chart where the X-axis is time buckets
+(1-minute resolution) and each line is present (green) or absent/zero (grey) based
 on whether a ping was received in that minute. This clearly shows gaps.
 
-**Weekly chart implementation**: A bar chart where the X-axis is calendar days and
-the Y-axis is the count of pings received per day. Clicking a bar triggers a
+**Weekly chart implementation**: A line chart with cubic interpolation chart where the X-axis is calendar days and
+the Y-axis is the count of pings received per day. Clicking a line triggers a
 `window.location` update with the selected date as a query param.
 
 **Alternatives considered**:
 - D3.js: Extremely flexible but ~500KB and requires significant custom code for
-  simple bar charts — rejected on complexity and bundle size grounds.
+  simple line chart with cubic interpolation — rejected on complexity and bundle size grounds.
 - ApexCharts: Good API, but ~400KB and more complex licensing — not justified.
 - `go-echarts` (server-rendered): Would eliminate client-side JS but produces
   complex HTML; less maintainable than a simple Chart.js integration.

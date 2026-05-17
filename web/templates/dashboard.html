@@ -179,13 +179,20 @@
 
     const labels = data.buckets.map(b => b.time.slice(11, 16)); // HH:MM
     const values = data.buckets.map(b => b.count);
-    const colors = values.map(v => v > 0 ? '#4caf50' : '#e0e0e0');
 
     const canvas = document.getElementById('daily-chart');
     if (dailyChart) dailyChart.destroy();
     dailyChart = new Chart(canvas, {
-      type: 'bar',
-      data: { labels, datasets: [{ data: values, backgroundColor: colors, borderWidth: 0, barPercentage: 1, categoryPercentage: 1 }] },
+      type: 'line',
+      data: { labels, datasets: [{
+        data: values,
+        borderColor: '#4caf50',
+        backgroundColor: 'rgba(76,175,80,0.15)',
+        borderWidth: 2,
+        pointRadius: 0,
+        tension: 0.4,
+        fill: true
+      }]},
       options: {
         responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false }, tooltip: {
@@ -214,8 +221,17 @@
     const canvas = document.getElementById('weekly-chart');
     if (weeklyChart) weeklyChart.destroy();
     weeklyChart = new Chart(canvas, {
-      type: 'bar',
-      data: { labels, datasets: [{ data: values, backgroundColor: '#1976d2', borderWidth: 0 }] },
+      type: 'line',
+      data: { labels, datasets: [{
+        data: values,
+        borderColor: '#1976d2',
+        backgroundColor: 'rgba(25,118,210,0.15)',
+        borderWidth: 2,
+        pointRadius: 4,
+        pointHoverRadius: 6,
+        tension: 0.4,
+        fill: true
+      }]},
       options: {
         responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false }, tooltip: {
