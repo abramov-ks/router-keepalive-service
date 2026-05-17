@@ -47,17 +47,30 @@ func ListRouters(database *sql.DB) ([]model.RouterInfo, error) {
 	return result, rows.Err()
 }
 
+// sqliteTZOffset returns an offset string like "+3 hours" or "-5 hours" for use
+// in SQLite's datetime() function, derived from the current time.Local zone.
+func sqliteTZOffset() string {
+	_, secs := time.Now().Zone()
+	hours := secs / 3600
+	if hours >= 0 {
+		return fmt.Sprintf("+%d hours", hours)
+	}
+	return fmt.Sprintf("%d hours", hours)
+}
+
 // DailyStats returns 1-minute bucket ping counts for a router on a given date (YYYY-MM-DD).
 // The returned slice always has exactly 1440 entries (one per minute of the day).
+// Times are expressed in time.Local so the dashboard shows the configured timezone.
 func DailyStats(database *sql.DB, routerID, date string) ([]model.BucketPoint, error) {
+	tz := sqliteTZOffset()
 	rows, err := database.Query(`
-		SELECT strftime('%Y-%m-%dT%H:%M:00Z', received_at) AS bucket,
+		SELECT strftime('%Y-%m-%dT%H:%M:00', datetime(received_at, ?)) AS bucket,
 		       COUNT(*) AS cnt
 		FROM ping_events
-		WHERE router_id = ? AND date(received_at) = ?
+		WHERE router_id = ? AND date(datetime(received_at, ?)) = ?
 		GROUP BY bucket
 		ORDER BY bucket
-	`, routerID, date)
+	`, tz, routerID, tz, date)
 	if err != nil {
 		return nil, err
 	}
@@ -77,15 +90,15 @@ func DailyStats(database *sql.DB, routerID, date string) ([]model.BucketPoint, e
 		return nil, err
 	}
 
-	// Zero-fill all 1440 minutes
+	// Zero-fill all 1440 minutes in local time
 	result := make([]model.BucketPoint, 1440)
-	base, err := time.Parse("2006-01-02", date)
+	base, err := time.ParseInLocation("2006-01-02", date, time.Local)
 	if err != nil {
 		return nil, fmt.Errorf("invalid date %q: %w", date, err)
 	}
 	for i := 0; i < 1440; i++ {
 		t := base.Add(time.Duration(i) * time.Minute)
-		key := t.UTC().Format("2006-01-02T15:04:05Z")
+		key := t.Format("2006-01-02T15:04:05")
 		result[i] = model.BucketPoint{Time: key, Count: counts[key]}
 	}
 	return result, nil
@@ -93,14 +106,16 @@ func DailyStats(database *sql.DB, routerID, date string) ([]model.BucketPoint, e
 
 // WeeklyStats returns per-day ping counts for the last 7 days for a router.
 // The returned slice always has exactly 7 entries (today−6 through today).
+// Dates are in time.Local so day boundaries match the configured timezone.
 func WeeklyStats(database *sql.DB, routerID string) ([]model.DayPoint, error) {
+	tz := sqliteTZOffset()
 	rows, err := database.Query(`
-		SELECT date(received_at) AS day, COUNT(*) AS cnt
+		SELECT date(datetime(received_at, ?)) AS day, COUNT(*) AS cnt
 		FROM ping_events
 		WHERE router_id = ? AND received_at >= datetime('now', '-7 days')
 		GROUP BY day
 		ORDER BY day
-	`, routerID)
+	`, tz, routerID)
 	if err != nil {
 		return nil, err
 	}
