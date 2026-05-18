@@ -18,7 +18,8 @@
     <input type="date" id="date-input">
 
     <div class="toggle-group">
-      <button id="btn-day" class="active" onclick="switchView('day')">Day</button>
+      <button id="btn-24h" onclick="switchView('24h')">Last 24h</button>
+      <button id="btn-day" onclick="switchView('day')">Day</button>
       <button id="btn-week" onclick="switchView('week')">Week</button>
     </div>
   </div>
@@ -32,10 +33,13 @@
       <p id="empty-msg">No routers have pinged yet.</p>
     </div>
     <div id="chart-area">
-      <div class="chart-container">
+      <div class="chart-container" id="container-24h">
+        <canvas id="last24h-chart"></canvas>
+      </div>
+      <div class="chart-container" id="container-day" style="display:none">
         <canvas id="daily-chart"></canvas>
       </div>
-      <div class="chart-container" style="display:none">
+      <div class="chart-container" id="container-week" style="display:none">
         <canvas id="weekly-chart"></canvas>
       </div>
     </div>
@@ -44,17 +48,26 @@
 
 <script src="/static/chart.umd.min.js"></script>
 <script>
+window.serverTzOffset = {{.TzOffsetMinutes}};
 (function () {
   // ── State ──────────────────────────────────────────────────────────────────
   let currentRouter = '{{.Router}}';
   let currentDate   = '{{.Date}}';
-  let currentView   = '{{.View}}' || 'day';
+  let currentView   = '{{.View}}' || '24h';
+  let last24hChart  = null;
   let dailyChart    = null;
   let weeklyChart   = null;
 
   // ── Helpers ────────────────────────────────────────────────────────────────
+  // Returns today's date string in server timezone (YYYY-MM-DD)
   function todayStr() {
-    return new Date().toISOString().slice(0, 10);
+    return new Date(Date.now() + window.serverTzOffset * 60000).toISOString().slice(0, 10);
+  }
+
+  // Returns current minutes since midnight in server timezone (0–1439)
+  function nowMinutes() {
+    const now = new Date();
+    return (now.getUTCHours() * 60 + now.getUTCMinutes() + window.serverTzOffset + 1440) % 1440;
   }
 
   function updateURL() {
@@ -71,6 +84,23 @@
   function showCharts() {
     document.getElementById('empty-state').style.display = 'none';
     document.getElementById('chart-area').style.display = 'block';
+  }
+
+  // Draws a vertical dashed line at the given label index on any Chart.js chart
+  function drawNowLine(chart, index) {
+    const ctx = chart.ctx;
+    const x   = chart.scales.x.getPixelForValue(index);
+    const top = chart.chartArea.top;
+    const bot = chart.chartArea.bottom;
+    ctx.save();
+    ctx.beginPath();
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = 'rgba(220, 50, 50, 0.75)';
+    ctx.lineWidth   = 1.5;
+    ctx.moveTo(x, top);
+    ctx.lineTo(x, bot);
+    ctx.stroke();
+    ctx.restore();
   }
 
   // ── Router selector ────────────────────────────────────────────────────────
@@ -124,7 +154,7 @@
   function initDatePicker() {
     const input = document.getElementById('date-input');
     const today = todayStr();
-    const minDate = new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10);
+    const minDate = new Date(Date.now() + window.serverTzOffset * 60000 - 6 * 86400000).toISOString().slice(0, 10);
     input.max = today;
     input.min = minDate;
     if (!currentDate) currentDate = today;
@@ -133,7 +163,6 @@
 
   document.getElementById('date-input').addEventListener('change', function () {
     currentDate = this.value;
-    currentView = 'day';
     switchView('day', false);
     updateURL();
     renderDaily();
@@ -142,30 +171,73 @@
   // ── View toggle ────────────────────────────────────────────────────────────
   function switchView(view, doRender) {
     currentView = view;
-    const dailyCanvas   = document.getElementById('daily-chart');
-    const weeklyCanvas  = document.getElementById('weekly-chart');
-    const dateInput     = document.getElementById('date-input');
+    const dateInput = document.getElementById('date-input');
 
-    if (view === 'day') {
-      dailyCanvas.parentElement.style.display = 'block';
-      weeklyCanvas.parentElement.style.display = 'none';
-      dateInput.disabled = false;
-      document.getElementById('btn-day').classList.add('active');
-      document.getElementById('btn-week').classList.remove('active');
-      if (doRender !== false) renderDaily();
-    } else {
-      dailyCanvas.parentElement.style.display = 'none';
-      weeklyCanvas.parentElement.style.display = 'block';
-      dateInput.disabled = true;
-      document.getElementById('btn-day').classList.remove('active');
-      document.getElementById('btn-week').classList.add('active');
-      if (doRender !== false) renderWeekly();
+    document.getElementById('container-24h').style.display  = view === '24h'  ? 'block' : 'none';
+    document.getElementById('container-day').style.display  = view === 'day'  ? 'block' : 'none';
+    document.getElementById('container-week').style.display = view === 'week' ? 'block' : 'none';
+
+    document.getElementById('btn-24h').classList.toggle('active',  view === '24h');
+    document.getElementById('btn-day').classList.toggle('active',  view === 'day');
+    document.getElementById('btn-week').classList.toggle('active', view === 'week');
+
+    dateInput.disabled = (view !== 'day');
+
+    if (view === 'day' && !currentDate) {
+      currentDate = todayStr();
+      dateInput.value = currentDate;
     }
+
     updateURL();
+    if (doRender !== false) renderActive();
   }
 
   function renderActive() {
-    if (currentView === 'week') renderWeekly(); else renderDaily();
+    if (currentView === '24h')  renderLast24h();
+    else if (currentView === 'week') renderWeekly();
+    else renderDaily();
+  }
+
+  // ── Last 24h chart ─────────────────────────────────────────────────────────
+  async function renderLast24h() {
+    if (!currentRouter) return;
+    const url = '/api/stats/last24h?router_id=' + encodeURIComponent(currentRouter);
+    const res  = await fetch(url);
+    if (res.status === 404) { showEmpty('No data for this router.'); return; }
+    showCharts();
+    const data = await res.json();
+
+    const labels = data.buckets.map(b => b.time.slice(11, 16)); // HH:MM
+    const values = data.buckets.map(b => b.count);
+
+    const canvas = document.getElementById('last24h-chart');
+    if (last24hChart) last24hChart.destroy();
+    last24hChart = new Chart(canvas, {
+      type: 'line',
+      data: { labels, datasets: [{
+        data: values,
+        borderColor: '#4caf50',
+        backgroundColor: 'rgba(76,175,80,0.15)',
+        borderWidth: 2,
+        pointRadius: 0,
+        tension: 0.4,
+        fill: true
+      }]},
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: { title: items => items[0].label, label: item => item.raw > 0 ? item.raw + ' ping(s)' : 'No ping' }
+          }
+        },
+        scales: {
+          x: { ticks: { maxTicksLimit: 24, maxRotation: 0 }, grid: { display: false } },
+          y: { display: false }
+        },
+        animation: { onComplete: () => drawNowLine(last24hChart, 1439) }
+      }
+    });
   }
 
   // ── Daily chart ────────────────────────────────────────────────────────────
@@ -179,6 +251,7 @@
 
     const labels = data.buckets.map(b => b.time.slice(11, 16)); // HH:MM
     const values = data.buckets.map(b => b.count);
+    const isToday = (currentDate === todayStr());
 
     const canvas = document.getElementById('daily-chart');
     if (dailyChart) dailyChart.destroy();
@@ -195,13 +268,17 @@
       }]},
       options: {
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false }, tooltip: {
-          callbacks: { title: items => items[0].label, label: item => item.raw > 0 ? item.raw + ' ping(s)' : 'No ping' }
-        }},
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: { title: items => items[0].label, label: item => item.raw > 0 ? item.raw + ' ping(s)' : 'No ping' }
+          }
+        },
         scales: {
           x: { ticks: { maxTicksLimit: 24, maxRotation: 0 }, grid: { display: false } },
           y: { display: false }
-        }
+        },
+        animation: { onComplete: () => { if (isToday) drawNowLine(dailyChart, nowMinutes()); } }
       }
     });
   }
@@ -217,6 +294,7 @@
 
     const labels = data.days.map(d => d.date);
     const values = data.days.map(d => d.count);
+    const todayIdx = labels.indexOf(todayStr());
 
     const canvas = document.getElementById('weekly-chart');
     if (weeklyChart) weeklyChart.destroy();
@@ -234,13 +312,15 @@
       }]},
       options: {
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false }, tooltip: {
-          callbacks: { label: item => item.raw + ' ping(s)' }
-        }},
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: item => item.raw + ' ping(s)' } }
+        },
         scales: {
           x: { grid: { display: false } },
           y: { beginAtZero: true, ticks: { precision: 0 } }
         },
+        animation: { onComplete: () => { if (todayIdx >= 0) drawNowLine(weeklyChart, todayIdx); } },
         onClick: (evt, elements) => {
           if (!elements.length) return;
           const idx = elements[0].index;
@@ -253,8 +333,9 @@
   }
 
   // ── Init ───────────────────────────────────────────────────────────────────
-  window.switchView = switchView; // expose for onclick attributes
+  window.switchView = switchView;
   initDatePicker();
+  switchView(currentView, false); // set initial button/panel state without rendering
   loadRouters();
 })();
 </script>

@@ -104,6 +104,57 @@ func DailyStats(database *sql.DB, routerID, date string) ([]model.BucketPoint, e
 	return result, nil
 }
 
+// Last24hStats returns 1-minute bucket ping counts for the rolling 24-hour window
+// ending at the current moment. The returned slice always has exactly 1440 entries.
+// Times are expressed in time.Local.
+func Last24hStats(database *sql.DB, routerID string) ([]model.BucketPoint, error) {
+	tz := sqliteTZOffset()
+	now := time.Now().In(time.Local)
+	start := now.Add(-24 * time.Hour)
+
+	// Round start down to the minute
+	start = start.Truncate(time.Minute)
+
+	startUTC := start.UTC().Format("2006-01-02 15:04:05")
+	endUTC := now.UTC().Format("2006-01-02 15:04:05")
+
+	rows, err := database.Query(`
+		SELECT strftime('%Y-%m-%dT%H:%M:00', datetime(received_at, ?)) AS bucket,
+		       COUNT(*) AS cnt
+		FROM ping_events
+		WHERE router_id = ?
+		  AND received_at >= ?
+		  AND received_at <= ?
+		GROUP BY bucket
+		ORDER BY bucket
+	`, tz, routerID, startUTC, endUTC)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	counts := make(map[string]int, 1440)
+	for rows.Next() {
+		var bucket string
+		var cnt int
+		if err := rows.Scan(&bucket, &cnt); err != nil {
+			return nil, err
+		}
+		counts[bucket] = cnt
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	result := make([]model.BucketPoint, 1440)
+	for i := 0; i < 1440; i++ {
+		t := start.Add(time.Duration(i) * time.Minute)
+		key := t.Format("2006-01-02T15:04:05")
+		result[i] = model.BucketPoint{Time: key, Count: counts[key]}
+	}
+	return result, nil
+}
+
 // WeeklyStats returns per-day ping counts for the last 7 days for a router.
 // The returned slice always has exactly 7 entries (today−6 through today).
 // Dates are in time.Local so day boundaries match the configured timezone.
