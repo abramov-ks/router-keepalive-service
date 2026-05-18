@@ -90,6 +90,7 @@ func main() {
 	r.Get("/ping", handler.PingHandler(database, store))
 	r.Get("/api/routers", handler.RoutersHandler(database))
 	r.Get("/api/stats/daily", handler.DailyStatsHandler(database))
+	r.Get("/api/stats/last24h", handler.Last24hStatsHandler(database))
 	r.Get("/api/stats/weekly", handler.WeeklyStatsHandler(database))
 	r.Get("/", handler.DashboardHandler(database, templateFS))
 
