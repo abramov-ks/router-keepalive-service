@@ -196,6 +196,34 @@ func WeeklyStats(database *sql.DB, routerID string) ([]model.DayPoint, error) {
 	return result, nil
 }
 
+// LastSeenByRouter returns the most recent ping time for every known router.
+// Timestamps are stored by SQLite in UTC and returned as UTC instants.
+func LastSeenByRouter(database *sql.DB) (map[string]time.Time, error) {
+	rows, err := database.Query(`
+		SELECT router_id, MAX(received_at)
+		FROM ping_events
+		GROUP BY router_id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]time.Time)
+	for rows.Next() {
+		var id, seen string
+		if err := rows.Scan(&id, &seen); err != nil {
+			return nil, err
+		}
+		t, err := time.ParseInLocation("2006-01-02 15:04:05", seen, time.UTC)
+		if err != nil {
+			return nil, fmt.Errorf("parse last_seen %q for router %q: %w", seen, id, err)
+		}
+		result[id] = t
+	}
+	return result, rows.Err()
+}
+
 // RouterExists returns true when the given router ID has at least one ping stored.
 func RouterExists(database *sql.DB, routerID string) (bool, error) {
 	var count int

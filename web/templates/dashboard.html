@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MikroTik Keepalive</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="{{.Base}}/static/style.css">
 </head>
 <body>
 
@@ -46,8 +46,9 @@
   </div>
 </main>
 
-<script src="/static/chart.umd.min.js"></script>
+<script src="{{.Base}}/static/chart.umd.min.js"></script>
 <script>
+const BASE = '{{.Base}}';
 window.serverTzOffset = {{.TzOffsetMinutes}};
 (function () {
   // ── State ──────────────────────────────────────────────────────────────────
@@ -105,7 +106,7 @@ window.serverTzOffset = {{.TzOffsetMinutes}};
 
   // ── Router selector ────────────────────────────────────────────────────────
   async function loadRouters() {
-    const res = await fetch('/api/routers');
+    const res = await fetch(BASE + '/api/routers');
     const routers = await res.json();
     const sel = document.getElementById('router-select');
     sel.innerHTML = '';
@@ -144,7 +145,7 @@ window.serverTzOffset = {{.TzOffsetMinutes}};
   document.getElementById('router-select').addEventListener('change', async function () {
     currentRouter = this.value;
     updateURL();
-    const res = await fetch('/api/routers');
+    const res = await fetch(BASE + '/api/routers');
     const routers = await res.json();
     updateLastPing(routers.find(r => r.router_id === currentRouter));
     renderActive();
@@ -201,7 +202,7 @@ window.serverTzOffset = {{.TzOffsetMinutes}};
   // ── Last 24h chart ─────────────────────────────────────────────────────────
   async function renderLast24h() {
     if (!currentRouter) return;
-    const url = '/api/stats/last24h?router_id=' + encodeURIComponent(currentRouter);
+    const url = BASE + '/api/stats/last24h?router_id=' + encodeURIComponent(currentRouter);
     const res  = await fetch(url);
     if (res.status === 404) { showEmpty('No data for this router.'); return; }
     showCharts();
@@ -243,7 +244,7 @@ window.serverTzOffset = {{.TzOffsetMinutes}};
   // ── Daily chart ────────────────────────────────────────────────────────────
   async function renderDaily() {
     if (!currentRouter) return;
-    const url = '/api/stats/daily?router_id=' + encodeURIComponent(currentRouter) + '&date=' + currentDate;
+    const url = BASE + '/api/stats/daily?router_id=' + encodeURIComponent(currentRouter) + '&date=' + currentDate;
     const res  = await fetch(url);
     if (res.status === 404) { showEmpty('No data for this router on ' + currentDate + '.'); return; }
     showCharts();
@@ -286,7 +287,7 @@ window.serverTzOffset = {{.TzOffsetMinutes}};
   // ── Weekly chart ───────────────────────────────────────────────────────────
   async function renderWeekly() {
     if (!currentRouter) return;
-    const url  = '/api/stats/weekly?router_id=' + encodeURIComponent(currentRouter);
+    const url  = BASE + '/api/stats/weekly?router_id=' + encodeURIComponent(currentRouter);
     const res  = await fetch(url);
     if (res.status === 404) { showEmpty('No weekly data for this router.'); return; }
     showCharts();

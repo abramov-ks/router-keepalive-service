@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"io/fs"
@@ -17,6 +18,8 @@ import (
 	"github.com/cyrill/mikrotik-keepalive-server/internal/config"
 	"github.com/cyrill/mikrotik-keepalive-server/internal/db"
 	"github.com/cyrill/mikrotik-keepalive-server/internal/handler"
+	"github.com/cyrill/mikrotik-keepalive-server/internal/monitor"
+	"github.com/cyrill/mikrotik-keepalive-server/internal/notify"
 )
 
 //go:embed web/static
@@ -68,10 +71,16 @@ func main() {
 	// ── Allowlist & reload ────────────────────────────────────────────────────
 	store := config.NewAllowlistStore(cfg.AllowedRouters)
 	configPath := filepath.Join(binDir, "config.yaml")
-	config.StartReloadHandler(configPath, store, cfg.Port, cfg.Timezone)
+	config.StartReloadHandler(configPath, store, cfg.Port, cfg.Timezone, cfg.Telegram)
 
 	// ── Background jobs ───────────────────────────────────────────────────────
 	db.StartCleanupJob(database)
+
+	// ── Telegram outage alerts (opt-in: only when telegram block is present) ──
+	if cfg.Telegram != nil {
+		tg := notify.NewTelegram(cfg.Telegram.BotToken, cfg.Telegram.ChatID)
+		go monitor.New(database, tg, cfg.Telegram).Run(context.Background())
+	}
 
 	// ── Static files ──────────────────────────────────────────────────────────
 	staticSub, err := fs.Sub(staticFS, "web/static")
@@ -85,6 +94,8 @@ func main() {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
+	basePath := envOr("BASE_PATH", "")
+
 	r.Handle("/static/*", http.StripPrefix("/static/", cacheHandler(http.FileServer(http.FS(staticSub)))))
 	r.Get("/health", handler.HealthHandler(database))
 	r.Get("/ping", handler.PingHandler(database, store))
@@ -92,10 +103,15 @@ func main() {
 	r.Get("/api/stats/daily", handler.DailyStatsHandler(database))
 	r.Get("/api/stats/last24h", handler.Last24hStatsHandler(database))
 	r.Get("/api/stats/weekly", handler.WeeklyStatsHandler(database))
-	r.Get("/", handler.DashboardHandler(database, templateFS))
+	r.Get("/", handler.DashboardHandler(database, templateFS, basePath))
 
-	slog.Info("starting server", "port", port, "db", dbPath)
-	if err := http.ListenAndServe(":"+port, r); err != nil {
+	var h http.Handler = r
+	if basePath != "" {
+		h = http.StripPrefix(basePath, r)
+	}
+
+	slog.Info("starting server", "port", port, "db", dbPath, "base", basePath)
+	if err := http.ListenAndServe(":"+port, h); err != nil {
 		slog.Error("server error", "err", err)
 		os.Exit(1)
 	}

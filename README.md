@@ -12,6 +12,7 @@ Lightweight Go service that receives periodic HTTP pings from MikroTik routers a
   - **Week** — last 7 days, click a day to drill into it
 - Current-time indicator: red dashed vertical line on all charts
 - Router allowlist: restrict which router IDs are accepted (403 for others)
+- Telegram alerts: message to your channel when a router's pings disappear for more than N seconds, and again once they are back and stable
 - SIGHUP live reload of the allowlist without restarting
 - Single self-contained binary — all assets embedded via `go:embed`
 
@@ -46,6 +47,29 @@ allowed_routers:            # empty = allow all
 ```
 
 All keys are optional. Absent keys use built-in defaults. An invalid config causes the service to exit with a descriptive error.
+
+### Telegram alerts
+
+Add an optional `telegram` block to get notified when a router stops pinging:
+
+```yaml
+telegram:
+  bot_token: "123456789:AAF..."   # from @BotFather
+  chat_id: "@my_channel"          # or numeric ID, e.g. "-1001234567890"
+  threshold_seconds: 120          # N: silence threshold AND recovery stability window (default 300)
+  routers: [dacha-router]         # optional; empty = monitor all known routers
+  messages:                       # optional; defaults include the router ID
+    down: "Кажется, пропал пинг с дачи"
+    up: "Кажется, пинг вернулся"
+  router_messages:                # optional per-router overrides
+    dacha-router:
+      down: "Дача offline"
+      up: "Дача online"
+```
+
+Create a bot via **@BotFather** and add it to your channel as an administrator with the "Post messages" permission.
+
+Behavior: one "down" message per continuous outage once silence exceeds `threshold_seconds`; one "up" message after pings have resumed and stayed stable for the same window (an unstable, flapping connection is coalesced into a single outage). Without the `telegram` block the feature is fully disabled. Telegram being unreachable never affects ping reception or the dashboard — delivery is retried up to 3 times, then dropped with an error log. The `telegram` block is **not** reloaded on SIGHUP; restart the service after changing it.
 
 ### Reload allowlist without restart
 

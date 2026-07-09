@@ -1,5 +1,6 @@
 # Go binaries
 server
+server-linux
 *.exe
 *.test
 *.out
@@ -15,6 +16,9 @@ vendor/
 # Environment
 .env
 .env.*
+
+# Local config (contains Telegram bot token)
+config.yaml
 
 # OS artifacts
 .DS_Store

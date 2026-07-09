@@ -18,9 +18,10 @@ type dashboardData struct {
 	Date            string
 	View            string
 	TzOffsetMinutes int
+	Base            string
 }
 
-func DashboardHandler(database *sql.DB, templateFS embed.FS) http.HandlerFunc {
+func DashboardHandler(database *sql.DB, templateFS embed.FS, base string) http.HandlerFunc {
 	tmpl := template.Must(template.ParseFS(templateFS, "web/templates/dashboard.html"))
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -31,6 +32,7 @@ func DashboardHandler(database *sql.DB, templateFS embed.FS) http.HandlerFunc {
 			Date:            q.Get("date"),
 			View:            q.Get("view"),
 			TzOffsetMinutes: tzSecs / 60,
+			Base:            base,
 		}
 		if data.Date == "" {
 			data.Date = time.Now().In(time.Local).Format("2006-01-02")

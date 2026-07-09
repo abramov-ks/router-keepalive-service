@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"reflect"
 	"sync"
 	"syscall"
 
@@ -41,7 +42,7 @@ func (s *AllowlistStore) Set(ids []string) {
 	s.mu.Unlock()
 }
 
-func StartReloadHandler(configPath string, store *AllowlistStore, originalPort int, originalTimezone string) {
+func StartReloadHandler(configPath string, store *AllowlistStore, originalPort int, originalTimezone string, originalTelegram *TelegramConfig) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGHUP)
 	go func() {
@@ -69,6 +70,10 @@ func StartReloadHandler(configPath string, store *AllowlistStore, originalPort i
 			}
 			if base.Timezone != originalTimezone {
 				slog.Warn("timezone change ignored on reload — restart required", "configured", base.Timezone, "active", originalTimezone)
+			}
+			applyDefaults(&base)
+			if !reflect.DeepEqual(base.Telegram, originalTelegram) {
+				slog.Warn("telegram settings change ignored on reload — restart required")
 			}
 		}
 	}()
